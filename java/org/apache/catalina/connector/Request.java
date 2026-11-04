@@ -2783,6 +2783,18 @@ public class Request implements HttpServletRequest {
         return parts;
     }
 
+    /**
+     * Adds two long values, throwing ArithmeticException on overflow.
+     * Equivalent to Math.addExact(long, long).
+     */
+    private static long addExact(long x, long y) {
+        long r = x + y;
+        if (((x ^ r) & (y ^ r)) < 0) {
+            throw new ArithmeticException("long overflow");
+        }
+        return r;
+    }
+
     private void parseParts(boolean explicit) {
 
         // Return immediately if the parts have already been parsed
@@ -2868,11 +2880,10 @@ public class Request implements HttpServletRequest {
                 List<FileItem> items =
                         upload.parseRequest(new ServletRequestContext(this));
                 int maxPostSize = getConnector().getMaxPostSize();
-                int postSize = 0;
+                long postSize = 0;
                 Charset charset = getCharset();
                 for (FileItem item : items) {
                     ApplicationPart part = new ApplicationPart(item, location);
-                    parts.add(part);
                     if (part.getSubmittedFileName() == null) {
                         String name = part.getName();
                         String value = null;
@@ -2884,15 +2895,16 @@ public class Request implements HttpServletRequest {
                         if (maxPostSize >= 0) {
                             // Have to calculate equivalent size. Not completely
                             // accurate but close enough.
-                            postSize += name.getBytes(charset).length;
+                            // Name
+                            postSize = addExact(postSize, name.getBytes(charset).length);
                             if (value != null) {
                                 // Equals sign
-                                postSize++;
+                                postSize = addExact(postSize, 1);
                                 // Value length
-                                postSize += part.getSize();
+                                postSize = addExact(postSize, part.getSize());
                             }
                             // Value separator
-                            postSize++;
+                            postSize = addExact(postSize, 1);
                             if (postSize > maxPostSize) {
                                 parameters.setParseFailedReason(FailReason.POST_TOO_LARGE);
                                 throw new IllegalStateException(sm.getString(
@@ -2901,6 +2913,7 @@ public class Request implements HttpServletRequest {
                         }
                         parameters.addParameter(name, value);
                     }
+                    parts.add(part);
                 }
 
                 success = true;
