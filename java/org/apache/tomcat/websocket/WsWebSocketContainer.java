@@ -373,6 +373,9 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
 
             if (httpResponse.status != 101) {
                 if(isRedirectStatus(httpResponse.status)){
+                    // HTTP redirect. Authentication either successful or not required.
+                    userProperties.remove(Constants.AUTHORIZATION_HEADER_NAME);
+
                     List<String> locationHeader =
                             httpResponse.getHandshakeResponse().getHeaders().get(
                                     Constants.LOCATION_HEADER_NAME);
@@ -450,6 +453,9 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
                             Integer.toString(httpResponse.status)));
                 }
             }
+            // HTTP upgrade successful. Authentication either successful or not required.
+            userProperties.remove(Constants.AUTHORIZATION_HEADER_NAME);
+
             HandshakeResponse handshakeResponse = httpResponse.getHandshakeResponse();
             clientEndpointConfiguration.getConfigurator().afterResponse(handshakeResponse);
 
