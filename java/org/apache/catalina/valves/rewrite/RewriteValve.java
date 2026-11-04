@@ -308,7 +308,7 @@ public class RewriteValve extends ValveBase {
             // As long as MB isn't a char sequence or affiliated, this has to be
             // converted to a string
             Charset uriCharset = request.getConnector().getURICharset();
-            String originalQueryStringEncoded = request.getQueryString();
+            String queryStringOriginalEncoded = request.getQueryString();
             MessageBytes urlMB =
                     context ? request.getRequestPathMB() : request.getDecodedRequestURIMB();
             urlMB.toChars();
@@ -375,11 +375,11 @@ public class RewriteValve extends ValveBase {
 
                     StringBuilder urlStringEncoded =
                             new StringBuilder(URLEncoder.DEFAULT.encode(urlStringDecoded, uriCharset));
-                    if (!qsd && originalQueryStringEncoded != null
-                            && originalQueryStringEncoded.length() > 0) {
+                    if (!qsd && queryStringOriginalEncoded != null
+                            && !queryStringOriginalEncoded.isEmpty()) {
                         if (rewrittenQueryStringDecoded == null) {
                             urlStringEncoded.append('?');
-                            urlStringEncoded.append(originalQueryStringEncoded);
+                            urlStringEncoded.append(queryStringOriginalEncoded);
                         } else {
                             if (qsa) {
                                 // if qsa is specified append the query
@@ -387,7 +387,7 @@ public class RewriteValve extends ValveBase {
                                 urlStringEncoded.append(URLEncoder.QUERY.encode(
                                         rewrittenQueryStringDecoded, uriCharset));
                                 urlStringEncoded.append('&');
-                                urlStringEncoded.append(originalQueryStringEncoded);
+                                urlStringEncoded.append(queryStringOriginalEncoded);
                             } else if (index == urlStringEncoded.length() - 1) {
                                 // if the ? is the last character delete it, its only purpose was to
                                 // prevent the rewrite module from appending the query string
@@ -513,16 +513,24 @@ public class RewriteValve extends ValveBase {
                     }
                     chunk.append(urlStringDecoded);
                     request.getCoyoteRequest().decodedURI().toChars();
-                    // Set the new Query if there is one
-                    if (queryStringDecoded != null) {
+                    // Set the new Query String
+                    if (queryStringDecoded == null) {
+                        // No new query string. Therefore the original is
+                        // retained unless QSD is defined.
+                        if (qsd) {
+                            request.getCoyoteRequest().queryString().recycle();
+                        }
+                    } else {
+                        // New query string. Therefore the original is dropped
+                        // unless QSA is defined (and QSD is not).
                         request.getCoyoteRequest().queryString().setString(null);
                         chunk = request.getCoyoteRequest().queryString().getCharChunk();
                         chunk.recycle();
                         chunk.append(URLEncoder.QUERY.encode(queryStringDecoded, uriCharset));
-                        if (qsa && originalQueryStringEncoded != null &&
-                                originalQueryStringEncoded.length() > 0) {
+                        if (qsa && queryStringOriginalEncoded != null &&
+                                !queryStringOriginalEncoded.isEmpty()) {
                             chunk.append('&');
-                            chunk.append(originalQueryStringEncoded);
+                            chunk.append(queryStringOriginalEncoded);
                         }
                         if (!chunk.isNull()) {
                             request.getCoyoteRequest().queryString().toChars();
@@ -612,6 +620,10 @@ public class RewriteValve extends ValveBase {
                     StringTokenizer flagsTokenizer = new StringTokenizer(flags, ",");
                     while (flagsTokenizer.hasMoreElements()) {
                         parseRuleFlag(line, rule, flagsTokenizer.nextToken());
+                    }
+                    // If QSD and QSA are present, QSD always takes precedence
+                    if (rule.isQsdiscard()) {
+                        rule.setQsappend(false);
                     }
                 }
                 return rule;

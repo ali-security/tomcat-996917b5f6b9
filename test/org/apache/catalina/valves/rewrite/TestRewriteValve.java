@@ -16,6 +16,7 @@
  */
 package org.apache.catalina.valves.rewrite;
 
+import java.io.File;
 import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -177,17 +178,241 @@ public class TestRewriteValve extends TomcatBaseTest {
     }
 
     @Test
-    public void testQueryString() throws Exception {
+    public void testQueryStringTargetOnly() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?je=2", "/b/id=1", "/c/id=1", "je=2");
+    }
+
+    @Test
+    public void testQueryStringTargetOnlyQSA() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?je=2 [QSA]", "/b/id=1", "/c/id=1", "je=2");
+    }
+
+    @Test
+    public void testQueryStringTargetOnlyQSD() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?je=2 [QSD]", "/b/id=1", "/c/id=1", "je=2");
+    }
+
+    @Test
+    public void testQueryStringTargetOnlyQSAQSD() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?je=2 [QSA,QSD]", "/b/id=1", "/c/id=1", "je=2");
+    }
+
+    @Test
+    public void testQueryStringTargetOnlyQS() throws Exception {
         doTestRewrite("RewriteRule ^/b/(.*) /c?$1", "/b/id=1", "/c", "id=1");
     }
 
     @Test
+    public void testQueryStringTargetOnlyQSAQS() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c?$1 [QSA]", "/b/id=1", "/c", "id=1");
+    }
+
+    @Test
+    public void testQueryStringTargetOnlyQSDQS() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c?$1 [QSD]", "/b/id=1", "/c", "id=1");
+    }
+
+    @Test
+    public void testQueryStringTargetOnlyQSAQSDQS() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c?$1 [QSA,QSD]", "/b/id=1", "/c", "id=1");
+    }
+
+    @Test
+    public void testQueryStringSourceOnly() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1", "/b/d?id=1", "/c/d", "id=1");
+    }
+
+    @Test
+    public void testQueryStringSourceOnlyQSA() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1 [QSA]", "/b/d?id=1", "/c/d", "id=1");
+    }
+
+    @Test
+    public void testQueryStringSourceOnlyQSD() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1 [QSD]", "/b/d?id=1", "/c/d", null);
+    }
+
+    @Test
+    public void testQueryStringSourceOnlyQSAQSD() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1 [QSA,QSD]", "/b/d?id=1", "/c/d", null);
+    }
+
+    @Test
+    public void testQueryStringSourceAndTarget() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?id=1", "/b/d?je=2", "/c/d", "id=1");
+    }
+
+    @Test
+    public void testQueryStringSourceAndTargetQSA() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?id=1 [QSA]", "/b/d?je=2", "/c/d", "id=1&je=2");
+    }
+
+    @Test
+    public void testQueryStringSourceAndTargetQSD() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?id=1 [QSD]", "/b/d?je=2", "/c/d", "id=1");
+    }
+
+    @Test
+    public void testQueryStringSourceAndTargetQSAQSD() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?id=1 [QSA,QSD]", "/b/d?je=2", "/c/d", "id=1");
+    }
+
+    @Test
+    public void testQueryStringEncoded01() throws Exception {
+        doTestRewrite("RewriteCond %{QUERY_STRING} a=(.*)\nRewriteRule ^/b.*$ /%1 [QSD]", "/b?a=c", "/c", null);
+    }
+
+    @Test
+    public void testQueryStringEncoded02() throws Exception {
+        /*
+         * The %nn sequences taken from the query string are inserted into the
+         * (already decoded) rewritten URL as literal characters. This version
+         * of Tomcat does not have the second stage rewrite encoding introduced
+         * by the fix for CVE-2025-31651, so the '%' characters are escaped when
+         * the encoded (i.e. un-decoded) requestURI is re-created. The upstream
+         * expectation of "/z/%2e%2e%2fc%2faAbB" therefore becomes
+         * "/z/%252e%252e%252fc%252faAbB" here. The important point is that the
+         * decoded URI retains the literal "%2e%2e%2f" text, i.e. no path
+         * traversal takes place. Compare with testUtf8FlagsB which expects
+         * "/c/%C2%A1%25C2%25A1" for the same reason.
+         */
+        doTestRewrite("RewriteCond %{QUERY_STRING} a=(.*)\nRewriteRule ^/b.*$ /z/%1 [QSD]",
+                "/b?a=%2e%2e%2fc%2faAbB", "/z/%252e%252e%252fc%252faAbB", null);
+    }
+
+    /*
+     * The advisory for CVE-2025-55752 describes a directory traversal (and,
+     * where PUT is enabled, remote code execution) triggered by a rewrite rule
+     * that inserts attacker controlled data - typically taken from the query
+     * string - into the rewritten URL. In the affected versions the rewritten
+     * URL was normalized *before* it was decoded so any ".." sequences created
+     * by that decoding were still present in the decoded URI handed to the
+     * Mapper and, from there, to the DefaultServlet.
+     *
+     * This version of Tomcat pre-dates the refactoring that introduced the
+     * additional decode step (see CVE-2025-31651). Here the URL used for
+     * rewriting has already been decoded by the connector and is normalized
+     * after rewriting, and the in-memory branch of
+     * CoyoteAdapter.postParseRequest() does not decode it again. The tests
+     * below confirm no traversal is possible and act as a regression guard
+     * against a decode step being (re-)introduced after normalization.
+     */
+    @Test
+    public void testQueryStringTraversalWebInf() throws Exception {
+        // %2e%2e%2f == ../
+        doTestTraversalBlocked("/b?a=%2e%2e%2fWEB-INF%2fweb.xml", "<web-app");
+    }
+
+    @Test
+    public void testQueryStringTraversalWebInfDoubleEncoded() throws Exception {
+        // Guards against a double decode of the rewritten URL
+        doTestTraversalBlocked("/b?a=%252e%252e%252fWEB-INF%252fweb.xml", "<web-app");
+    }
+
+    @Test
+    public void testQueryStringTraversalWebInfNotEncoded() throws Exception {
+        // Normalization has to happen before the /WEB-INF check in
+        // StandardContextValve, i.e. no ".." may survive into the decoded URI
+        doTestTraversalBlocked("/b?a=../WEB-INF/web.xml", "<web-app");
+    }
+
+    @Test
+    public void testQueryStringTraversalStaticFile() throws Exception {
+        // The %nn sequences must not be decoded, so no resource is reachable
+        doTestTraversalBlocked("/b?a=%2e%2e%2findex.html", "Index page");
+    }
+
+    @Test
+    public void testQueryStringTraversalStaticFileAboveRoot() throws Exception {
+        doTestTraversalBlocked("/b?a=%2e%2e%2f%2e%2e%2findex.html", "Index page");
+    }
+
+    @Test
+    public void testQueryStringTraversalNotEncodedIsNormalized() throws Exception {
+        /*
+         * Nothing is encoded here so the ".." is part of the (already decoded)
+         * rewritten URL and is resolved by the normalization that follows the
+         * rewrite. "/z/../index.html" therefore becomes "/index.html" which is
+         * a valid, publicly accessible resource *inside* the web application.
+         *
+         * This is the documented behaviour for a rewrite that denormalizes the
+         * URL (compare testNonNormalizedPathRewrite) and it is not the
+         * CVE-2025-55752 traversal: the ".." never reaches the Mapper or the
+         * /WEB-INF and /META-INF checks. It is asserted here to show that the
+         * ".." really is resolved rather than passed through - the request is
+         * mapped to "/index.html", not to the non-existent literal path.
+         */
+        ByteChunk res = new ByteChunk();
+        int rc = doTestTraversal("/b?a=../index.html", res);
+        Assert.assertEquals(HttpURLConnection.HTTP_OK, rc);
+        Assert.assertTrue(res.toString().contains("Index page"));
+    }
+
+    private void doTestTraversalBlocked(String request, String forbiddenContent) throws Exception {
+
+        ByteChunk res = new ByteChunk();
+        int rc = doTestTraversal(request, res);
+
+        String body = res.toString();
+        if (body == null) {
+            body = "";
+        }
+        Assert.assertFalse("Traversal succeeded for [" + request + "]. Response code [" + rc +
+                "], body [" + body + "]", body.contains(forbiddenContent));
+        Assert.assertEquals("Unexpected response code for [" + request + "]",
+                HttpURLConnection.HTTP_NOT_FOUND, rc);
+    }
+
+    private int doTestTraversal(String request, ByteChunk res) throws Exception {
+
+        Tomcat tomcat = getTomcatInstance();
+
+        // A real docBase is required so the DefaultServlet has something to serve
+        File appDir = new File("test/webapp");
+        Context ctx = tomcat.addContext("", appDir.getAbsolutePath());
+
+        RewriteValve rewriteValve = new RewriteValve();
+        ctx.getPipeline().addValve(rewriteValve);
+
+        // Insert the (attacker controlled) query string into the rewritten URL
+        rewriteValve.setConfiguration("RewriteCond %{QUERY_STRING} a=(.*)\n" +
+                "RewriteRule ^/b.*$ /z/%1 [QSD]");
+
+        Tomcat.addServlet(ctx, "default", new DefaultServlet());
+        ctx.addServletMappingDecoded("/", "default");
+
+        tomcat.start();
+
+        // Control. Confirm the DefaultServlet can serve content from the docBase
+        // so that a 404 for the traversal attempts is meaningful.
+        ByteChunk control = new ByteChunk();
+        int controlRc = getUrl("http://localhost:" + getPort() + "/index.html", control, null);
+        control.setCharset(StandardCharsets.UTF_8);
+        Assert.assertEquals(HttpURLConnection.HTTP_OK, controlRc);
+        Assert.assertTrue(control.toString().contains("Index page"));
+
+        int rc = getUrl("http://localhost:" + getPort() + request, res, null);
+        res.setCharset(StandardCharsets.UTF_8);
+        return rc;
+    }
+
+    @Test
     public void testQueryStringRemove() throws Exception {
-        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?", "/b/d?=1", "/c/d", null);
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?", "/b/d?id=1", "/c/d", null);
     }
 
     @Test
     public void testQueryStringRemove02() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1 [QSD]", "/b/d?id=1", "/c/d", null);
+    }
+
+    @Test
+    public void testQueryStringRemoveInvalid() throws Exception {
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?", "/b/d?=1", "/c/d", null);
+    }
+
+    @Test
+    public void testQueryStringRemoveInvalid02() throws Exception {
         doTestRewrite("RewriteRule ^/b/(.*) /c/$1 [QSD]", "/b/d?=1", "/c/d", null);
     }
 
@@ -513,7 +738,7 @@ public class TestRewriteValve extends TomcatBaseTest {
         // https://bz.apache.org/bugzilla/show_bug.cgi?id=60116
         doTestRewrite("RewriteCond %{QUERY_STRING} a=([a-z]*) [NC]\n"
                 + "RewriteRule .* - [E=X-Test:%1]",
-                    "/c?a=aAa", "/c", null, "aAa");
+                    "/c?a=aAa", "/c", "a=aAa", "aAa");
     }
 
 
@@ -654,6 +879,7 @@ public class TestRewriteValve extends TomcatBaseTest {
         Tomcat.addServlet(ctx, "snoop", new SnoopServlet());
         ctx.addServletMappingDecoded("/a/%5A", "snoop");
         ctx.addServletMappingDecoded("/c/*", "snoop");
+        ctx.addServletMappingDecoded("/z/*", "snoop");
         Tomcat.addServlet(ctx, "default", new DefaultServlet());
         ctx.addServletMappingDecoded("/", "default");
 
@@ -668,12 +894,16 @@ public class TestRewriteValve extends TomcatBaseTest {
             // were written into the request target
             Assert.assertEquals(400, rc);
         } else {
+            // If there is an expected URI, the request should be successful
+            Assert.assertEquals(200, rc);
             String body = res.toString();
             RequestDescriptor requestDesc = SnoopResult.parse(body);
             String requestURI = requestDesc.getRequestInfo("REQUEST-URI");
             Assert.assertEquals(expectedURI, requestURI);
 
-            if (expectedQueryString != null) {
+            if (expectedQueryString == null) {
+                Assert.assertTrue(requestDesc.getParams().isEmpty());
+            } else {
                 String queryString = requestDesc.getRequestInfo("REQUEST-QUERY-STRING");
                 Assert.assertEquals(expectedQueryString, queryString);
             }
