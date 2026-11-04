@@ -25,6 +25,7 @@ import java.security.PrivilegedExceptionAction;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 import org.apache.coyote.ActionCode;
@@ -70,6 +71,13 @@ class Stream extends AbstractNonZeroStream implements HeaderEmitter {
 
     private final Http2UpgradeHandler handler;
     private final WindowAllocationManager allocationManager = new WindowAllocationManager(this);
+    /*
+     * Protect against mis-counting of active streams. The count of active
+     * streams is used to enforce the maximum concurrent streams limit so a
+     * stream must be added to, and removed from, that count no more than once.
+     */
+    private final AtomicBoolean addedToActiveCount = new AtomicBoolean(false);
+    private final AtomicBoolean removedFromActiveCount = new AtomicBoolean(false);
 
     // State machine would be too much overhead
     private int headerState = HEADER_STATE_START;
@@ -657,7 +665,14 @@ class Stream extends AbstractNonZeroStream implements HeaderEmitter {
                     log.debug(sm.getString("stream.reset.send", getConnectionId(), getIdAsString(),
                             se.getError()));
                 }
+                boolean active = state.isActive();
                 state.sendReset();
+                if (active) {
+                    // The stream was active so it has to be removed from the
+                    // count of active streams. Any subsequent attempt to remove
+                    // it (e.g. when the response completes) will be a NO-OP.
+                    handler.decrementActiveRemoteStreamCount(this);
+                }
                 cancelAllocationRequests();
                 handler.sendStreamReset(se);
             } catch (IOException ioe) {
@@ -686,6 +701,45 @@ class Stream extends AbstractNonZeroStream implements HeaderEmitter {
             log.debug(sm.getString("stream.recycle", getConnectionId(), getIdAsString()));
         }
         handler.replaceStream(this, new RecycledStream(getConnectionId(), getIdentifier(), state));
+    }
+
+
+    final void incrementActiveRemoteStreamCount() {
+        /*
+         * Protect against mis-counting of active streams. This method may be
+         * called more than once for a single stream (e.g. when trailer headers
+         * are received) but since the count of active streams is used to
+         * enforce the maximum concurrent streams limit, make sure each stream
+         * is only added to the active count exactly once.
+         */
+        if (addedToActiveCount.compareAndSet(false, true)) {
+            handler.activeRemoteStreamCount.incrementAndGet();
+        }
+    }
+
+
+    /*
+     * Used when the stream has already been included in the count of active
+     * streams before the Stream instance was available (e.g. a pushed stream).
+     */
+    final void markAddedToActiveRemoteStreamCount() {
+        addedToActiveCount.set(true);
+    }
+
+
+    final int decrementAndGetActiveRemoteStreamCount() {
+        /*
+         * Protect against mis-counting of active streams. This method should
+         * only be called once per stream but since the count of active streams
+         * is used to enforce the maximum concurrent streams limit, make sure
+         * each stream is only removed from the active count exactly once and
+         * only if it was added to that count in the first place.
+         */
+        if (addedToActiveCount.get() && removedFromActiveCount.compareAndSet(false, true)) {
+            return handler.activeRemoteStreamCount.decrementAndGet();
+        } else {
+            return handler.activeRemoteStreamCount.get();
+        }
     }
 
 
