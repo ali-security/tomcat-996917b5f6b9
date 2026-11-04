@@ -627,7 +627,7 @@ public class DefaultServlet extends HttpServlet {
         }
 
         InputStream resourceInputStream = null;
-
+        File tempContentFile = null;
         try {
             // Append data specified in ranges to existing content for this
             // resource - create a temp. file on the local filesystem to
@@ -636,8 +636,8 @@ public class DefaultServlet extends HttpServlet {
             if (range == IGNORE) {
                 resourceInputStream = req.getInputStream();
             } else {
-                File contentFile = executePartialPut(req, range, path);
-                resourceInputStream = new FileInputStream(contentFile);
+                tempContentFile = executePartialPut(req, range, path);
+                resourceInputStream = new FileInputStream(tempContentFile);
             }
 
             if (resources.write(path, resourceInputStream, true)) {
@@ -655,6 +655,11 @@ public class DefaultServlet extends HttpServlet {
                     resourceInputStream.close();
                 } catch (IOException ioe) {
                     // Ignore
+                }
+            }
+            if (tempContentFile != null) {
+                if (!tempContentFile.delete()) {
+                    log(sm.getString("defaultServlet.deleteTempFileFailed", tempContentFile.getAbsolutePath()));
                 }
             }
         }
@@ -680,13 +685,7 @@ public class DefaultServlet extends HttpServlet {
         // perform this operation
         File tempDir = (File) getServletContext().getAttribute
             (ServletContext.TEMPDIR);
-        // Convert all '/' characters to '.' in resourcePath
-        String convertedResourcePath = path.replace('/', '.');
-        File contentFile = new File(tempDir, convertedResourcePath);
-        if (contentFile.createNewFile()) {
-            // Clean up contentFile when Tomcat is terminated
-            contentFile.deleteOnExit();
-        }
+        File contentFile = File.createTempFile("put-part-", null, tempDir);
 
         try (RandomAccessFile randAccessContentFile =
             new RandomAccessFile(contentFile, "rw")) {
@@ -720,6 +719,13 @@ public class DefaultServlet extends HttpServlet {
                     randAccessContentFile.write(transferBuffer, 0, numBytesRead);
                 }
             }
+
+        } catch (IOException | RuntimeException | Error e) {
+            // This has to be done this way to be able to close the file without changing the method signature
+            if (!contentFile.delete()) {
+                log(sm.getString("defaultServlet.deleteTempFileFailed", contentFile.getAbsolutePath()));
+            }
+            throw e;
         }
 
         return contentFile;
