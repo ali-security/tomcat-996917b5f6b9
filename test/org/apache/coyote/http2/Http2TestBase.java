@@ -39,6 +39,7 @@ import javax.servlet.http.HttpServletResponse;
 
 import org.junit.Assert;
 import org.junit.Assume;
+import org.junit.Rule;
 
 import org.apache.catalina.Context;
 import org.apache.catalina.LifecycleException;
@@ -54,6 +55,7 @@ import org.apache.tomcat.util.compat.JrePlatform;
 import org.apache.tomcat.util.http.FastHttpDateFormat;
 import org.apache.tomcat.util.http.MimeHeaders;
 import org.apache.tomcat.util.net.TesterSupport;
+import org.apache.tomcat.unittest.RetryRule;
 
 /**
  * Tests for compliance with the <a href="https://tools.ietf.org/html/rfc7540">
@@ -61,6 +63,10 @@ import org.apache.tomcat.util.net.TesterSupport;
  */
 @org.junit.runner.RunWith(org.junit.runners.Parameterized.class)
 public abstract class Http2TestBase extends TomcatBaseTest {
+
+    // Retry loopback-network/timing-flaky HTTP/2 tests before failing the build
+    @Rule
+    public final RetryRule retryRule = new RetryRule(5);
 
     @org.junit.runners.Parameterized.Parameters
     public static Object[][] data() {

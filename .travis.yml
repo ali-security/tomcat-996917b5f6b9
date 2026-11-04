@@ -18,6 +18,13 @@ language: java
 jdk: oraclejdk8
 arch: arm64
 
+# One job per connector: the three connector passes of "ant test" in a single
+# job exceed the Travis job time limit (and 16 forked test JVMs exhaust memory)
+env:
+    - TEST_NIO=true TEST_NIO2=false TEST_APR=false
+    - TEST_NIO=false TEST_NIO2=true TEST_APR=false
+    - TEST_NIO=false TEST_NIO2=false TEST_APR=true
+
 addons:
     apt:
       packages:
@@ -40,7 +47,7 @@ install:
     - wget -q $JDK_URL && tar xzf OpenJDK*.tar.gz
     - mv jdk8* jdk
     - export JAVA_HOME=`pwd`/jdk
-    - wget -q https://mirrors.netix.net/apache/ant/binaries/apache-ant-1.10.9-bin.tar.gz && tar xzf apache-ant-*-bin.tar.gz
+    - wget -q https://archive.apache.org/dist/ant/binaries/apache-ant-1.10.9-bin.tar.gz && tar xzf apache-ant-*-bin.tar.gz
     - export ANT_HOME=`pwd`/apache-ant-1.10.9
     - export PATH="$JAVA_HOME/bin:$ANT_HOME/bin:$PATH"
     - java -version
@@ -54,7 +61,7 @@ install:
     - make
     - make install
     - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$HOME/tmp/apr-build/lib"
-    - git clone -q https://github.com/apache/tomcat-native.git $HOME/tmp/tomcat-native
+    - git clone -q -b 1.2.25 https://github.com/apache/tomcat-native.git $HOME/tmp/tomcat-native
     - cd $HOME/tmp/tomcat-native/native
     - sh buildconf --with-apr=$HOME/tmp/apr
     - ./configure --with-apr=$HOME/tmp/apr --with-java-home=$JAVA_HOME --with-ssl=yes --prefix=$HOME/tmp/tomcat-native-build
@@ -63,11 +70,16 @@ install:
     - cd $CURR_PWD
     - yes | cp build.properties.default build.properties
     - echo >> build.properties
-    - echo "test.threads=16" >> build.properties
+    - nproc && free -m
+    - echo "test.threads=4" >> build.properties
     - echo "test.relaxTiming=true" >> build.properties
     - echo "test.excludePerformance=true" >> build.properties
     - echo "test.openssl.path=/dev/null/openssl" >> build.properties
     - echo "test.apr.loc=$HOME/tmp/tomcat-native-build/lib" >> build.properties
+    - echo "execute.test.nio=$TEST_NIO" >> build.properties
+    - echo "execute.test.nio2=$TEST_NIO2" >> build.properties
+    - echo "execute.test.apr=$TEST_APR" >> build.properties
+    - bash ./.travis/makeTestCerts.sh
 
 
 script:

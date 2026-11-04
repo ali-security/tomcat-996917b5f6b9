@@ -31,4 +31,7 @@ RC=$?
         done
     fi
 } > test-failures.log
+# Print per-suite results, totals and every skipped test (with its reason) to
+# the CI log, since the ant output itself only lands in ant-test.log
+python3 .travis/testSummary.py output/build/logs
 exit $RC

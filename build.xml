@@ -800,7 +800,8 @@
     <!-- Property that determines if manifests need updating -->
     <uptodate property="manifests.uptodate"
         targetfile="${tomcat.manifests}/default.manifest" >
-      <srcfiles file="${user.home}/build.properties" />
+      <srcfiles dir="${user.home}" includes="build.properties"
+          erroronmissingdir="false" />
       <srcfiles file="${basedir}/build.properties" />
       <srcfiles file="${basedir}/build.properties.default" />
       <srcfiles file="${basedir}/build.xml" />
